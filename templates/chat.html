@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot - Home</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .chat-message.user { align-self: flex-end; background-color: #6366f1; color: white; border-bottom-right-radius: 0; }
+        .chat-message.bot { align-self: flex-start; background-color: #e5e7eb; color: #1f2937; border-bottom-left-radius: 0; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-gray-50">
+    <!-- Header -->
+    <header class="bg-white shadow-md p-4 flex justify-between items-center sticky top-0 z-10">
+        <h1 class="text-2xl font-bold text-indigo-700">AI Assistant</h1>
+        <div class="flex items-center space-x-4">
+            <span class="text-gray-600 font-medium hidden sm:inline">Logged in as: <span class="text-indigo-600">{{ username }}</span></span>
+            <a href="{{ url_for('logout') }}" class="text-sm font-medium text-white bg-red-500 hover:bg-red-600 py-2 px-3 rounded-lg transition duration-150 ease-in-out shadow-md">
+                Logout
+            </a>
+        </div>
+    </header>
+
+    <!-- Flash Messages (for successful login) -->
+    <div class="p-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="space-y-2 max-w-3xl mx-auto">
+                    {% for category, message in messages %}
+                        <li class="p-3 rounded-lg font-medium 
+                            {% if category == 'success' %} bg-green-100 text-green-700 border border-green-300
+                            {% else %} bg-blue-100 text-blue-700 border border-blue-300
+                            {% endif %}"
+                        >
+                            {{ message }}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Main Chat Area -->
+    <main class="flex-grow flex justify-center p-4 overflow-hidden">
+        <div class="flex flex-col w-full max-w-3xl h-full bg-white rounded-xl shadow-2xl overflow-hidden">
+            <!-- Chat Log -->
+            <div id="chat-log" class="flex-grow p-4 space-y-4 overflow-y-auto">
+                <!-- Initial Bot Message -->
+                <div class="flex justify-start">
+                    <div class="chat-message bot p-3 rounded-xl max-w-xs md:max-w-md shadow">
+                        Hello! I'm your AI assistant. How can I help you today?
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Form -->
+            <form id="chat-form" class="p-4 border-t border-gray-200 bg-gray-50">
+                <div class="flex space-x-3">
+                    <input type="text" id="user-input" placeholder="Type your message..." 
+                           class="flex-grow px-4 py-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 shadow-sm" required>
+                    <button type="submit" id="send-button"
+                            class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-5 rounded-xl shadow-lg transition duration-150 ease-in-out disabled:bg-indigo-400">
+                        Send
+                    </button>
+                </div>
+            </form>
+        </div>
+    </main>
+
+    <script>
+        const chatLog = document.getElementById('chat-log');
+        const chatForm = document.getElementById('chat-form');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+
+        function appendMessage(sender, message) {
+            const messageContainer = document.createElement('div');
+            messageContainer.className = 'flex ' + (sender === 'user' ? 'justify-end' : 'justify-start');
+
+            const messageBubble = document.createElement('div');
+            messageBubble.className = 'chat-message p-3 rounded-xl max-w-xs md:max-w-md shadow ' + sender;
+            messageBubble.textContent = message;
+
+            messageContainer.appendChild(messageBubble);
+            chatLog.appendChild(messageContainer);
+            chatLog.scrollTop = chatLog.scrollHeight; // Auto-scroll to bottom
+        }
+
+        chatForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            appendMessage('user', message);
+            userInput.value = '';
+            sendButton.disabled = true;
+
+            // Append loading bubble
+            appendMessage('bot', 'Typing...');
+            const loadingBubble = chatLog.lastElementChild.querySelector('.chat-message');
+
+            try {
+                const response = await fetch('{{ url_for("chat") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                if (response.status === 401) {
+                    // Redirect to login if unauthorized
+                    window.location.href = '{{ url_for("login") }}';
+                    return;
+                }
+
+                const data = await response.json();
+                
+                // Remove loading bubble
+                chatLog.removeChild(chatLog.lastElementChild); 
+                
+                if (data.response) {
+                    appendMessage('bot', data.response);
+                } else if (data.error) {
+                    appendMessage('bot', 'Error: ' + data.error);
+                }
+
+            } catch (error) {
+                // Remove loading bubble
+                chatLog.removeChild(chatLog.lastElementChild);
+                appendMessage('bot', 'Network Error: Could not reach the server.');
+                console.error('Chat error:', error);
+            } finally {
+                sendButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

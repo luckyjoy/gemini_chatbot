@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center bg-gray-100">
+
+    <div class="w-full max-w-md">
+        <div class="bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
+            <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Welcome Back</h2>
+            <p class="text-center text-gray-500 mb-8">Sign in to start chatting with the AI assistant.</p>
+            
+            <form id="loginForm" class="space-y-6">
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
+                    <input type="text" id="username" name="username" required
+                           class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                    <input type="password" id="password" name="password" required
+                           class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out">
+                </div>
+                
+                <div id="message" class="text-center text-sm font-medium text-red-600 hidden"></div>
+
+                <button type="submit"
+                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-300 ease-in-out transform hover:scale-[1.01]">
+                    Log In
+                </button>
+            </form>
+            
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const messageElement = document.getElementById('message');
+            messageElement.textContent = '';
+            messageElement.classList.add('hidden');
+
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    // Store the JWT token upon successful login
+                    localStorage.setItem('access_token', data.access_token);
+                    // Redirect to the main chat page
+                    window.location.href = '/'; 
+                } else {
+                    const errorData = await response.json();
+                    messageElement.textContent = errorData.msg || 'Login failed. Please check your credentials.';
+                    messageElement.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Network or server error:', error);
+                messageElement.textContent = 'Could not connect to the server.';
+                messageElement.classList.remove('hidden');
+            }
+        });
+
+        // If a token already exists, redirect to the chat page immediately
+        if (localStorage.getItem('access_token')) {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>

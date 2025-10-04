@@ -1,0 +1,9 @@
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-JWT-Extended>=4.7.1
+Werkzeug==2.3.7
+# FIX: Removed the restrictive version constraint to allow installation
+google-genai
+python-dotenv==1.0.0
+Flask-Session
+requests>=2.32.5
