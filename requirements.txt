@@ -1,0 +1,11 @@
+#python3.11 -m venv venv
+#.\venv\Scripts\activate
+#pip install -r requirements.txt
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-JWT-Extended>=4.7.1
+Werkzeug==2.3.7
+openai==1.31.0
+python-dotenv==1.0.0
+Flask-Session
+requests>=2.32.5

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot by Bang Thien Nguyen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+    </style>
+</head>
+<body>
+
+<div class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="bg-white shadow-md p-4 flex justify-between items-center sticky top-0 z-10">
+        <h1 class="text-2xl font-bold text-indigo-700">AI Chatbot by Bang Thien Nguyen</h1>
+        <div class="flex items-center space-x-4">
+            <span id="user-display" class="text-sm font-medium text-gray-600">Loading...</span>
+            <button id="logout-button" class="bg-red-500 hover:bg-red-600 text-white text-sm py-1 px-3 rounded-lg shadow-sm transition duration-150 ease-in-out">
+                Logout
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow p-4 overflow-y-auto">
+        <div id="messages-container" class="max-w-4xl mx-auto space-y-4 pb-20">
+            <!-- Flash Messages -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="p-3 rounded-lg shadow-md text-sm {% if category == 'success' %}bg-green-100 text-green-700{% else %}bg-red-100 text-red-700{% endif %}">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- Welcome Message -->
+            <div class="flex justify-start">
+                <div class="bg-gray-200 text-gray-800 p-4 rounded-xl rounded-tl-none shadow-md max-w-lg">
+                    Hello! I'm your AI assistant powered by Open-AI API. How can I help you today?
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Input Bar (Fixed at Bottom) -->
+    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 shadow-2xl">
+        <div class="max-w-4xl mx-auto flex space-x-3">
+            <input type="text" id="user-input" placeholder="Type your message..."
+                   class="flex-grow p-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+            <button id="send-button"
+                    class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl shadow-lg transition duration-150 ease-in-out">
+                Send
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const tokenKey = 'access_token';
+    const messagesContainer = document.getElementById('messages-container');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+    const userDisplay = document.getElementById('user-display');
+    const logoutButton = document.getElementById('logout-button');
+
+    const CHAT_URL = '{{ url_for("chat") }}';
+    // FIX: Removing the Jinja template from the JavaScript variable definition entirely
+    // since the raw Jinja code is causing a SyntaxError in the browser environment.
+    // We fall back to a simple, un-prefixed relative path '/logout'.
+    const LOGOUT_URL = '/logout';
+
+    // --- Authentication and Utility Functions ---
+
+    /** Removes token and redirects to login page. */
+    function logoutAndRedirect(message = "Session expired. Please log out and log back in.") {
+        console.warn("[DEBUG] No token found. Redirecting to logout.");
+        localStorage.removeItem(tokenKey);
+        // Force the browser to replace the current history state, preventing back navigation to chat
+        // We use window.location.origin + LOGOUT_URL here in case the environment needs the full path
+        window.location.replace(window.location.origin + LOGOUT_URL);
+    }
+
+    /** Appends a message to the chat interface. */
+    function appendMessage(sender, text) {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('flex', 'max-w-lg');
+
+        if (sender === 'user') {
+            messageDiv.classList.add('justify-end');
+            messageDiv.innerHTML = `
+                <div class="bg-indigo-600 text-white p-4 rounded-xl rounded-br-none shadow-md">
+                    ${text}
+                </div>
+            `;
+        } else {
+            messageDiv.classList.add('justify-start');
+            messageDiv.innerHTML = `
+                <div class="bg-gray-200 text-gray-800 p-4 rounded-xl rounded-tl-none shadow-md">
+                    ${text}
+                </div>
+            `;
+        }
+
+        messagesContainer.appendChild(messageDiv);
+        // Scroll to the latest message
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    /** Displays system error message. */
+    function displayError(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.classList.add('p-3', 'rounded-lg', 'shadow-md', 'text-sm', 'bg-red-100', 'text-red-700');
+        errorDiv.textContent = message;
+        messagesContainer.appendChild(errorDiv);
+    }
+
+
+    /** Parses the JWT to extract the user identity. */
+    function getUserIdFromToken(token) {
+        try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            return JSON.parse(jsonPayload).sub; // 'sub' is the standard JWT subject/identity claim key
+        } catch (e) {
+            console.error("Error parsing JWT:", e);
+            return null;
+        }
+    }
+
+    // --- Main Logic ---
+    (function() { // Wrap main logic in an IIFE to allow 'return'
+        // 1. Initial Authentication Check
+        const token = localStorage.getItem(tokenKey);
+
+        if (!token) {
+            // If no token, force logout (this prevents the infinite loop)
+            logoutAndRedirect();
+            return; // Stop execution
+        } else {
+            // Token found: Set user identity display
+            const userId = getUserIdFromToken(token);
+            if (userId) {
+                userDisplay.textContent = `Logged in as: ${userId}`;
+                console.log("[DEBUG] Token found. Session active for user:", userId);
+            } else {
+                // Token is invalid/expired client-side
+                logoutAndRedirect("Invalid or expired token detected.");
+                return;
+            }
+        }
+    })();
+
+
+    // 2. Chat Message Handler
+    async function handleSendMessage() {
+        const message = userInput.value.trim();
+        if (message === "") return;
+
+        // Clear input and display user message immediately
+        userInput.value = '';
+        appendMessage('user', message);
+
+        // Disable input while waiting for response
+        sendButton.disabled = true;
+        userInput.disabled = true;
+        sendButton.textContent = 'Sending...';
+
+        try {
+            const currentToken = localStorage.getItem(tokenKey);
+            if (!currentToken) {
+                logoutAndRedirect();
+                return;
+            }
+
+            const response = await fetch(CHAT_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // CRITICAL: Send the JWT token in the Authorization header
+                    'Authorization': `Bearer ${currentToken}`
+                },
+                body: JSON.stringify({ message: message })
+            });
+
+            if (response.status === 401) {
+                // Server responded with Unauthorized (token invalid/expired)
+                displayError("Session expired. Please log out and log back in.");
+                logoutAndRedirect();
+                return;
+            }
+
+            const data = await response.json();
+            
+            if (response.ok) {
+                appendMessage('ai', data.response);
+            } else {
+                displayError(`AI Error: ${data.msg || "An unknown error occurred."}`);
+            }
+
+        } catch (error) {
+            console.error('Fetch error:', error);
+            displayError("A connection error occurred. Check server logs.");
+        } finally {
+            sendButton.disabled = false;
+            userInput.disabled = false;
+            sendButton.textContent = 'Send';
+            userInput.focus();
+        }
+    }
+
+    // 3. Event Listeners
+    sendButton.addEventListener('click', handleSendMessage);
+    userInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            handleSendMessage();
+        }
+    });
+
+    logoutButton.addEventListener('click', function() {
+        logoutAndRedirect();
+    });
+
+</script>
+
+</body>
+</html>
