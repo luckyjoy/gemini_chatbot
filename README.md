@@ -29,7 +29,7 @@ Ensure your `.env` file is in the project root and contains the following necess
 | :--- | :--- | :--- |
 | `GOOGLE_API_KEY` | Your **Gemini API Key**. | `AIzaSy...` |
 | `ADMIN_USER` | The default username for the database. | `admin` |
-| `ADMIN_PASS` | The password for the default user. | `admin1234@` |
+| `ADMIN_PASS` | The password for the default user. | `akj7@v$02f4@` |
 | `SECRET_KEY` | Flask session secret key. | `supersecretkey` |
 | `JWT_SECRET_KEY` | JWT signing secret key. | `jwt-secret-string` |
 
