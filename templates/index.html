@@ -1,400 +1,169 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chatbot by Bang Thien Nguyen</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f7f9fb;
-        }
-        /* Custom scrollbar for chat history */
-        #history-sidebar {
-            scrollbar-width: thin;
-            scrollbar-color: #4f46e5 #e5e7eb;
-        }
-        #history-sidebar::-webkit-scrollbar {
-            width: 8px;
-        }
-        #history-sidebar::-webkit-scrollbar-track {
-            background: #e5e7eb;
-        }
-        #history-sidebar::-webkit-scrollbar-thumb {
-            background-color: #4f46e5;
-            border-radius: 20px;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>Chatbot</title>
+  <style>
+    body {
+      display: flex;
+      height: 100vh;
+      margin: 0;
+      background-color: #1e1e2f;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+
+    #sidebar {
+      background-color: #2b2b3b;
+      padding: 10px;
+      overflow-y: auto;
+      min-width: 200px;
+      max-width: 400px;
+      resize: horizontal;
+      overflow: auto;
+      border-right: 2px solid #444;
+    }
+
+    #sidebar h2 {
+      text-align: center;
+      font-size: 18px;
+      margin-top: 0;
+    }
+
+    .chat-entry {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #3c3c52;
+      padding: 8px;
+      border-radius: 5px;
+      margin-bottom: 5px;
+    }
+
+    .chat-entry span {
+      flex: 1;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-entry button {
+      background: none;
+      border: none;
+      color: #ff5c5c;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    #chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+    }
+
+    #chat-box {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #555;
+      border-radius: 10px;
+      padding: 10px;
+      background-color: #2c2c40;
+    }
+
+    #input-container {
+      display: flex;
+      margin-top: 10px;
+    }
+
+    #user-input {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 8px 0 0 8px;
+    }
+
+    button.send-btn {
+      padding: 10px 20px;
+      border: none;
+      background-color: #4caf50;
+      color: #fff;
+      border-radius: 0 8px 8px 0;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
+  <div id="sidebar">
+    <h2>Chat History</h2>
+    <div id="history"></div>
+  </div>
 
-<div class="min-h-screen flex">
-    
-    <aside id="history-sidebar" class="w-72 bg-gray-900 text-white flex flex-col shadow-xl overflow-y-auto min-w-[200px] max-w-sm relative">
-        <div class="p-4 flex flex-col border-b border-gray-700">
-            <h1 class="text-xl font-bold text-indigo-400">Chatbot by Bang Thien Nguyen</h1>
-            <button id="new-chat-button" class="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-3 rounded-lg shadow-md transition duration-150">
-                + New Chat
-            </button>
-        </div>
-        
-        <nav id="history-list" class="flex-grow p-2 space-y-1">
-            <div class="p-4 text-center text-gray-500 text-sm">Loading History...</div>
-        </nav>
-        
-        <div class="p-4 border-t border-gray-700">
-            <span id="user-display" class="text-sm font-medium text-gray-400 block mb-2">Loading...</span>
-            <button id="logout-button" class="w-full bg-red-600 hover:bg-red-700 text-white text-sm py-2 px-3 rounded-lg transition duration-150">
-                Logout
-            </button>
-        </div>
-
-        <div id="drag-handle" 
-             class="absolute top-0 right-0 w-2 h-full cursor-col-resize bg-transparent hover:bg-gray-700/50 transition duration-100 ease-in-out">
-        </div>
-    </aside>
-
-    <div class="flex-grow flex flex-col">
-        <header class="bg-white shadow-md p-4 sticky top-0 z-10">
-            <h2 id="current-chat-title" class="text-xl font-semibold text-gray-800">New Chat</h2>
-        </header>
-
-        <main class="flex-grow overflow-y-auto p-4" style="max-height: calc(100vh - 130px);">
-            <div id="messages-container" class="max-w-4xl mx-auto space-y-4 pb-20">
-                <div class="flex justify-start">
-                    <div class="bg-gray-200 text-gray-800 p-4 rounded-xl rounded-tl-none shadow-md max-w-lg">
-                        Hello! I'm your AI assistant powered by Google Gemini API. Let's start a conversation!
-                    </div>
-                </div>
-            </div>
-        </main>
-
-        <div class="bg-white border-t border-gray-200 p-4 shadow-2xl sticky bottom-0">
-            <div class="max-w-4xl mx-auto flex space-x-3">
-                <input type="text" id="user-input" placeholder="Type your message..."
-                       class="flex-grow p-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
-                <button id="send-button"
-                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl shadow-lg transition duration-150 ease-in-out">
-                    Send
-                </button>
-            </div>
-        </div>
+  <div id="chat-container">
+    <div id="chat-box"></div>
+    <div id="input-container">
+      <input type="text" id="user-input" placeholder="Type a message..." />
+      <button class="send-btn" onclick="sendMessage()">Send</button>
     </div>
-</div>
+  </div>
 
-<script>
-    const tokenKey = 'access_token';
-    const messagesContainer = document.getElementById('messages-container');
-    const historyList = document.getElementById('history-list');
-    const userInput = document.getElementById('user-input');
-    const sendButton = document.getElementById('send-button');
-    const userDisplay = document.getElementById('user-display');
-    const logoutButton = document.getElementById('logout-button');
-    const newChatButton = document.getElementById('new-chat-button');
-    const currentChatTitle = document.getElementById('current-chat-title');
+  <script>
+    const token = sessionStorage.getItem("token");
 
-    const CHAT_URL = '{{ url_for("chat") }}';
-    const HISTORY_URL = '{{ url_for("get_chat_sessions") }}';
-    const LOAD_SESSION_URL = '{{ url_for("load_session", session_id="PLACEHOLDER") }}'.replace('PLACEHOLDER', '');
-    const LOGOUT_URL = '{{ url_for("logout") }}';
-    
-    // Global state for the current session
-    let currentSessionId = generateUniqueId();
-
-    // --- Utility Functions ---
-
-    function generateUniqueId() {
-        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    async function loadHistory() {
+      const res = await fetch("/api/history", {
+        headers: { Authorization: "Bearer " + token },
+      });
+      const data = await res.json();
+      const container = document.getElementById("history");
+      container.innerHTML = "";
+      data.forEach((item, index) => {
+        const div = document.createElement("div");
+        div.className = "chat-entry";
+        div.innerHTML = `
+          <span>${item.user}</span>
+          <button onclick="deleteChat(${index})">🗑️</button>
+        `;
+        container.appendChild(div);
+      });
     }
 
-    function logoutAndRedirect() {
-        localStorage.removeItem(tokenKey);
-        window.location.replace(window.location.origin + LOGOUT_URL);
-    }
-    
-    function displayNotification(message, isError = false) {
-        console.log(isError ? `[ERROR] ${message}` : `[SUCCESS] ${message}`);
-    }
-
-    function clearMessages() {
-        while (messagesContainer.children.length > 1) { 
-            messagesContainer.removeChild(messagesContainer.lastChild);
-        }
+    async function deleteChat(index) {
+      await fetch("/api/history/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + token,
+        },
+        body: JSON.stringify({ index }),
+      });
+      loadHistory();
     }
 
-    function appendMessage(sender, text) {
-        const messageDiv = document.createElement('div');
-        messageDiv.classList.add('flex', 'max-w-lg');
+    async function sendMessage() {
+      const input = document.getElementById("user-input");
+      const msg = input.value.trim();
+      if (!msg) return;
+      const chatBox = document.getElementById("chat-box");
+      chatBox.innerHTML += `<p><b>You:</b> ${msg}</p>`;
+      input.value = "";
 
-        const formattedText = text.replace(/\n/g, '<br>');
-
-        if (sender === 'user') {
-            messageDiv.classList.add('justify-end', 'ml-auto');
-            messageDiv.innerHTML = `
-                <div class="bg-indigo-600 text-white p-4 rounded-xl rounded-br-none shadow-md">
-                    ${formattedText}
-                </div>
-            `;
-        } else {
-            messageDiv.classList.add('justify-start');
-            messageDiv.innerHTML = `
-                <div class="bg-gray-200 text-gray-800 p-4 rounded-xl rounded-tl-none shadow-md">
-                    ${formattedText}
-                </div>
-            `;
-        }
-
-        messagesContainer.appendChild(messageDiv);
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + token,
+        },
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      chatBox.innerHTML += `<p><b>Bot:</b> ${data.response}</p>`;
+      chatBox.scrollTop = chatBox.scrollHeight;
+      loadHistory();
     }
 
-    function getUserIdFromToken(token) {
-        try {
-            const base64Url = token.split('.')[1];
-            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
-            return JSON.parse(jsonPayload).sub; 
-        } catch (e) {
-            return null;
-        }
-    }
-
-    // --- History Logic ---
-
-    async function fetchChatSessions() {
-        const currentToken = localStorage.getItem(tokenKey);
-        if (!currentToken) return;
-
-        try {
-            const response = await fetch(HISTORY_URL, {
-                method: 'GET',
-                headers: {'Authorization': `Bearer ${currentToken}`}
-            });
-            
-            if (response.status === 401) {
-                logoutAndRedirect();
-                return;
-            }
-
-            const data = await response.json();
-            renderHistoryList(data.sessions);
-
-        } catch (error) {
-            console.error('Failed to fetch chat history:', error);
-            historyList.innerHTML = '<div class="p-4 text-center text-red-400 text-sm">Failed to load history.</div>';
-        }
-    }
-
-    function renderHistoryList(sessions) {
-        historyList.innerHTML = '';
-        if (sessions.length === 0) {
-            historyList.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">No saved conversations.</div>';
-            return;
-        }
-        
-        sessions.forEach(session => {
-            const sessionItem = document.createElement('a');
-            sessionItem.href = '#';
-            sessionItem.classList.add(
-                'block', 'p-3', 'rounded-lg', 'text-sm', 'hover:bg-gray-800', 'transition', 'duration-150',
-                'history-item', (session.id === currentSessionId ? 'bg-indigo-600' : 'text-gray-200')
-            );
-            sessionItem.dataset.sessionId = session.id;
-            sessionItem.innerHTML = `
-                <div class="font-medium truncate">${session.title}</div>
-                <div class="text-xs text-gray-400 mt-1">${session.date}</div>
-            `;
-            
-            sessionItem.addEventListener('click', (e) => {
-                e.preventDefault();
-                loadChatSession(session.id);
-            });
-            
-            historyList.appendChild(sessionItem);
-        });
-    }
-
-    async function loadChatSession(sessionId) {
-        const currentToken = localStorage.getItem(tokenKey);
-        if (!currentToken) return;
-
-        clearMessages();
-        currentSessionId = sessionId;
-        currentChatTitle.textContent = "Loading...";
-
-        document.querySelectorAll('.history-item').forEach(item => {
-            item.classList.remove('bg-indigo-600', 'font-bold');
-            item.classList.add('text-gray-200');
-            if (item.dataset.sessionId === sessionId) {
-                 item.classList.add('bg-indigo-600', 'font-bold');
-                 currentChatTitle.textContent = item.querySelector('.font-medium').textContent;
-            }
-        });
-        
-        try {
-            const url = LOAD_SESSION_URL + sessionId;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {'Authorization': `Bearer ${currentToken}`}
-            });
-
-            if (response.status === 401) { logoutAndRedirect(); return; }
-
-            const data = await response.json();
-            if (response.ok) {
-                data.history.forEach(message => {
-                    if (message.role === 'user' || message.role === 'model') {
-                        appendMessage(message.role, message.parts[0].text);
-                    }
-                });
-            } else {
-                displayNotification(`Error loading session: ${data.msg}`, true);
-                currentChatTitle.textContent = "Error Loading Chat";
-            }
-
-        } catch (error) {
-            console.error('Failed to load chat session:', error);
-            currentChatTitle.textContent = "Connection Error";
-        }
-    }
-
-
-    // --- Main Logic ---
-
-    (function() { 
-        const token = localStorage.getItem(tokenKey);
-
-        if (!token) {
-            logoutAndRedirect();
-            return; 
-        } else {
-            const userId = getUserIdFromToken(token);
-            if (userId) {
-                userDisplay.textContent = `User: ${userId}`;
-                fetchChatSessions();
-            } else {
-                logoutAndRedirect("Invalid token detected.");
-                return;
-            }
-        }
-    })();
-
-
-    async function handleSendMessage() {
-        const message = userInput.value.trim();
-        if (message === "") return;
-
-        userInput.value = '';
-        appendMessage('user', message);
-
-        sendButton.disabled = true;
-        userInput.disabled = true;
-        sendButton.textContent = 'Sending...';
-
-        try {
-            const currentToken = localStorage.getItem(tokenKey);
-            if (!currentToken) { logoutAndRedirect(); return; }
-
-            const response = await fetch(CHAT_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${currentToken}`
-                },
-                body: JSON.stringify({ message: message, sessionId: currentSessionId })
-            });
-
-            if (response.status === 401) {
-                displayNotification("Session expired.", true);
-                logoutAndRedirect();
-                return;
-            }
-
-            const data = await response.json();
-            
-            if (response.ok) {
-                appendMessage('ai', data.response);
-                
-                if (data.isNewSession) {
-                    fetchChatSessions();
-                }
-
-            } else {
-                displayNotification(`AI Error: ${data.msg || "An error occurred."}`, true);
-            }
-
-        } catch (error) {
-            console.error('Fetch error:', error);
-            displayNotification("A connection error occurred.", true);
-        } finally {
-            sendButton.disabled = false;
-            userInput.disabled = false;
-            sendButton.textContent = 'Send';
-            userInput.focus();
-        }
-    }
-    
-    function handleNewChat() {
-        currentSessionId = generateUniqueId();
-        currentChatTitle.textContent = "New Chat";
-        clearMessages();
-        document.querySelectorAll('.history-item').forEach(item => {
-            item.classList.remove('bg-indigo-600', 'font-bold');
-            item.classList.add('text-gray-200');
-        });
-        messagesContainer.scrollTop = 0;
-    }
-
-
-    // 4. Event Listeners
-    sendButton.addEventListener('click', handleSendMessage);
-    userInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-            handleSendMessage();
-        }
-    });
-
-    logoutButton.addEventListener('click', logoutAndRedirect);
-    newChatButton.addEventListener('click', handleNewChat);
-    
-    // --- Resizing Logic ---
-    const sidebar = document.getElementById('history-sidebar');
-    const handle = document.getElementById('drag-handle');
-    let isResizing = false;
-    
-    handle.addEventListener('mousedown', function(e) {
-        isResizing = true;
-        document.body.style.userSelect = 'none';
-        document.body.style.cursor = 'col-resize';
-    });
-
-    document.addEventListener('mousemove', function(e) {
-        if (!isResizing) return;
-
-        let newWidth = e.clientX;
-        
-        const minWidth = 200; 
-        const maxWidth = 512; 
-
-        if (newWidth >= minWidth && newWidth <= maxWidth) {
-            sidebar.style.width = `${newWidth}px`;
-        }
-    });
-
-    document.addEventListener('mouseup', function() {
-        if (isResizing) {
-            isResizing = false;
-            document.body.style.userSelect = '';
-            document.body.style.cursor = 'default';
-        }
-    });
-    // --- End Resizing Logic ---
-
-</script>
-
+    window.onload = loadHistory;
+  </script>
 </body>
 </html>

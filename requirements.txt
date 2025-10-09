@@ -7,3 +7,4 @@ google-genai
 python-dotenv==1.0.0
 Flask-Session
 requests>=2.32.5
+Flask-CORS

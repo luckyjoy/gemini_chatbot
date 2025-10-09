@@ -1,141 +1,503 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chatbot - Home</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        .chat-message.user { align-self: flex-end; background-color: #6366f1; color: white; border-bottom-right-radius: 0; }
-        .chat-message.bot { align-self: flex-start; background-color: #e5e7eb; color: #1f2937; border-bottom-left-radius: 0; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chatbot by Bang Thien Nguyen</title>
+<!-- Load Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Load Marked and DOMPurify for secure Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
+<script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                fontFamily: {
+                    sans: ['Inter', 'sans-serif'],
+                },
+                colors: {
+                    // Light Theme Palette (Based on Example)
+                    'main-bg': '#f4f4f4', // Main background (Light Gray/Off-White)
+                    'panel-bg': '#ffffff', // Sidebar/Input/Content Panel background (White)
+                    'bot-bg': '#e5e7eb', // Bot message bubble (Gray-200)
+                    'user-bg': '#2563eb', // Blue-700 for User message bubble (High contrast)
+                    'accent': '#4f46e5', // Indigo-600 for buttons
+                    'resizer-bg': '#e2e8f0', // Resizer bar color (Very Light Blue-Gray, matching example)
+                    'resizer-hover': '#cbd5e1', // Resizer hover color (Slightly darker, matching example)
+                    'border-color': '#d1d5db', // Gray-300 for borders
+                }
+            }
+        }
+    }
+</script>
+<style>
+    /* Ensure the body takes full viewport height and setup for the main flex layout */
+    body {
+        min-height: 100vh;
+        background-color: var(--tw-colors-main-bg);
+        color: #1f2937; /* Dark text for light theme */
+        overflow: hidden; /* Prevents scrollbars when resizing */
+    }
+
+    /* Style for sidebar - Initial width is set inline to guarantee JS control */
+    #sidebar {
+        min-width: 280px; /* Minimum width constraint */
+        max-width: 50%; /* Max width constraint handled in JS */
+        overflow-y: auto; 
+        flex-shrink: 0; /* CRITICAL: Prevents flex container from shrinking the sidebar */
+        overflow-x: hidden; 
+    }
+    
+    /* Style for the rendered markdown code blocks */
+    #messages pre {
+        background-color: #f3f4f6; /* Gray-100 for code background */
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin-top: 0.5rem;
+        margin-bottom: 0.5rem;
+        color: #1f2937; /* Dark text for code */
+        border: 1px solid var(--tw-colors-border-color);
+    }
+    #messages code {
+        font-family: monospace;
+        font-size: 0.9rem;
+    }
+    /* Style for inline code */
+    #messages p code {
+        background-color: #e5e7eb; /* Gray-200 for inline code */
+        padding: 2px 4px;
+        border-radius: 3px;
+        color: #374151;
+    }
+
+    /* Style for the typing indicator (simulated streaming) */
+    #typing-indicator {
+        display: inline-block;
+        font-style: italic;
+        color: #4b5563; /* Darker gray for visibility */
+        animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+    
+    /* --- RESIZER CUSTOM STYLES (MATCHING YOUR EXAMPLE FUNCTIONALLY) --- */
+    #resizer {
+        width: 8px; /* Fixed width of the bar and click target */
+        cursor: ew-resize; /* Cursor for horizontal resizing */
+        background-color: var(--tw-colors-resizer-bg); 
+        border-left: 1px solid var(--tw-colors-border-color);
+        transition: background-color 0.15s ease-in-out;
+        z-index: 10;
+        flex-shrink: 0;
+    }
+
+    /* Visual change on hover */
+    #resizer:hover {
+        background-color: var(--tw-colors-resizer-hover); 
+    }
+
+    /* Highly visible color when the bar is actively being dragged (via JS class) */
+    #resizer.active {
+        background-color: #ef4444; /* Red color when active for strong feedback */
+    }
+
+    /* Set global cursor and prevent selection when resizing */
+    body.resizing {
+        cursor: ew-resize !important;
+        user-select: none;
+    }
+
+    /* Chat Area must take remaining space */
+    #chatArea {
+        overflow: hidden; 
+    }
+</style>
 </head>
-<body class="min-h-screen flex flex-col bg-gray-50">
-    <!-- Header -->
-    <header class="bg-white shadow-md p-4 flex justify-between items-center sticky top-0 z-10">
-        <h1 class="text-2xl font-bold text-indigo-700">AI Assistant</h1>
-        <div class="flex items-center space-x-4">
-            <span class="text-gray-600 font-medium hidden sm:inline">Logged in as: <span class="text-indigo-600">{{ username }}</span></span>
-            <a href="{{ url_for('logout') }}" class="text-sm font-medium text-white bg-red-500 hover:bg-red-600 py-2 px-3 rounded-lg transition duration-150 ease-in-out shadow-md">
-                Logout
-            </a>
-        </div>
-    </header>
+<!-- Main container uses flex to hold sidebar, resizer, and chat area -->
+<body class="bg-main-bg text-gray-800 flex h-screen font-sans antialiased">
 
-    <!-- Flash Messages (for successful login) -->
-    <div class="p-4">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <ul class="space-y-2 max-w-3xl mx-auto">
-                    {% for category, message in messages %}
-                        <li class="p-3 rounded-lg font-medium 
-                            {% if category == 'success' %} bg-green-100 text-green-700 border border-green-300
-                            {% else %} bg-blue-100 text-blue-700 border border-blue-300
-                            {% endif %}"
-                        >
-                            {{ message }}
-                        </li>
-                    {% endfor %}
-                </ul>
-            {% endif %}
-        {% endwith %}
+<!-- Custom Confirmation Modal -->
+<div id="confirmModal" class="hidden fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center transition-opacity duration-300">
+    <div class="bg-panel-bg p-6 rounded-xl shadow-2xl max-w-sm w-full border border-gray-300 transform transition-transform duration-300 scale-95">
+        <h4 class="text-xl font-bold mb-4 text-gray-900">Confirm Action</h4>
+        <p id="confirmMessage" class="text-gray-600 mb-6">Are you sure you want to perform this action?</p>
+        <div class="flex justify-end space-x-3">
+            <button id="cancelBtn" class="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg transition duration-150">
+                Cancel
+            </button>
+            <button id="confirmBtn" class="py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition duration-150">
+                Delete Chat
+            </button>
+        </div>
     </div>
+</div>
 
-    <!-- Main Chat Area -->
-    <main class="flex-grow flex justify-center p-4 overflow-hidden">
-        <div class="flex flex-col w-full max-w-3xl h-full bg-white rounded-xl shadow-2xl overflow-hidden">
-            <!-- Chat Log -->
-            <div id="chat-log" class="flex-grow p-4 space-y-4 overflow-y-auto">
-                <!-- Initial Bot Message -->
-                <div class="flex justify-start">
-                    <div class="chat-message bot p-3 rounded-xl max-w-xs md:max-w-md shadow">
-                        Hello! I'm your AI assistant. How can I help you today?
-                    </div>
-                </div>
-            </div>
+<!-- Sidebar for History and Controls -->
+<!-- Initial width set inline for guaranteed JS control -->
+<div id="sidebar" style="width: 300px;" class="bg-panel-bg border-r border-border-color flex flex-col p-4 shadow-lg">
+    <h3 class="text-2xl font-extrabold mb-6 text-gray-900 tracking-wider">AI Assistant</h3>
+    
+    <button onclick="clearHistory()" class="w-full py-3 px-4 mb-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-md transition duration-150 ease-in-out transform hover:scale-[1.01]">
+        Start New Chat
+    </button>
+    
+    <div id="sessions" class="flex-grow overflow-y-auto space-y-3 pr-2">
+        <!-- Session history will be displayed here -->
+        <div class="p-4 bg-gray-200 rounded-xl text-sm text-center text-gray-600">Loading history...</div>
+    </div>
+    
+    <button onclick="logout()" class="w-full py-3 px-4 mt-6 bg-gray-500 hover:bg-gray-600 text-white font-semibold rounded-lg shadow-md transition duration-150 ease-in-out">
+        Logout
+    </button>
+</div>
 
-            <!-- Input Form -->
-            <form id="chat-form" class="p-4 border-t border-gray-200 bg-gray-50">
-                <div class="flex space-x-3">
-                    <input type="text" id="user-input" placeholder="Type your message..." 
-                           class="flex-grow px-4 py-3 border border-gray-300 rounded-xl focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 shadow-sm" required>
-                    <button type="submit" id="send-button"
-                            class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-5 rounded-xl shadow-lg transition duration-150 ease-in-out disabled:bg-indigo-400">
-                        Send
-                    </button>
-                </div>
-            </form>
+<!-- Resizer Handle -->
+<div id="resizer" class="h-full"></div>
+
+<!-- Main Chat Area -->
+<div id="chatArea" class="flex-1 flex flex-col max-h-screen"> 
+    
+    <div id="messages" class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+        <!-- Initial Welcome Message -->
+        <div class="text-center text-gray-600 mt-4 p-5 border border-border-color rounded-xl bg-bot-bg shadow-inner mx-auto max-w-lg">
+            Hello! I am your AI assistant, powered by Gemini.
         </div>
-    </main>
+    </div>
+    
+    <div id="inputArea" class="p-4 bg-panel-bg border-t border-border-color sticky bottom-0 z-10">
+        <div class="flex space-x-3 items-end">
+            <textarea id="msgInput" placeholder="Type your code query or message... (Press Enter to send)"
+                   class="flex-1 px-4 py-3 bg-gray-100 text-gray-900 border border-gray-300 rounded-xl focus:ring-accent focus:border-accent transition duration-150 ease-in-out resize-none h-12 overflow-hidden placeholder-gray-500"
+                   rows="1"></textarea>
+            <button onclick="sendMessage()" id="sendBtn"
+                    class="py-3 px-6 bg-accent text-white font-bold rounded-xl shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition duration-150 ease-in-out h-12 flex items-center justify-center">
+                Send
+            </button>
+        </div>
+    </div>
+</div>
 
-    <script>
-        const chatLog = document.getElementById('chat-log');
-        const chatForm = document.getElementById('chat-form');
-        const userInput = document.getElementById('user-input');
-        const sendButton = document.getElementById('send-button');
+<script>
+    const token = localStorage.getItem('jwt');
+    const msgInput = document.getElementById('msgInput');
 
-        function appendMessage(sender, message) {
-            const messageContainer = document.createElement('div');
-            messageContainer.className = 'flex ' + (sender === 'user' ? 'justify-end' : 'justify-start');
+    if (!token) {
+        // Redirect to login if no token is found on the client side
+        window.location.href = window.location.origin + '/login';
+    }
 
-            const messageBubble = document.createElement('div');
-            messageBubble.className = 'chat-message p-3 rounded-xl max-w-xs md:max-w-md shadow ' + sender;
-            messageBubble.textContent = message;
+    // Initialize marked.js options for safer rendering
+    marked.setOptions({
+        gfm: true,
+        breaks: true,
+        headerIds: false,
+        mangle: false,
+    });
 
-            messageContainer.appendChild(messageBubble);
-            chatLog.appendChild(messageContainer);
-            chatLog.scrollTop = chatLog.scrollHeight; // Auto-scroll to bottom
+    // Helper to render Markdown safely
+    function renderMarkdown(text) {
+        const html = marked.parse(text);
+        // Using DOMPurify to clean HTML before insertion
+        return DOMPurify.sanitize(html);
+    }
+    
+    // ================= Gradual Typing Simulation =================
+    function typeResponse(element, fullText) {
+        let index = 0;
+        const typingInterval = 15; // Speed in ms per character
+        
+        element.innerHTML = '';
+        const textNode = document.createTextNode('');
+        element.appendChild(textNode);
+        
+        function typeChar() {
+            if (index < fullText.length) {
+                textNode.nodeValue += fullText.charAt(index);
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                
+                index++;
+                setTimeout(typeChar, typingInterval);
+            } else {
+                // Final render to handle complex markdown/code blocks correctly
+                element.innerHTML = renderMarkdown(fullText);
+            }
+        }
+        
+        typeChar();
+    }
+    // ================= END Gradual Typing Simulation =================
+
+    // Helper to append a message bubble (returns the bubble element for potential modification)
+    function appendMessage(role, text) {
+        const messagesDiv = document.getElementById('messages');
+        const messageWrapper = document.createElement('div');
+        const isBot = role === 'model';
+        
+        messageWrapper.className = `flex ${isBot ? 'justify-start' : 'justify-end'} mb-6`;
+        
+        const messageBubble = document.createElement('div');
+        messageBubble.className = `max-w-[85%] md:max-w-[70%] p-4 rounded-xl shadow-md transition duration-300 ${
+            isBot ? 'bg-bot-bg text-gray-800 rounded-tl-none border border-gray-300' : 'bg-user-bg text-white rounded-tr-none'
+        }`;
+        
+        if (text) {
+            messageBubble.innerHTML = renderMarkdown(text);
+        }
+        
+        messageWrapper.appendChild(messageBubble);
+        messagesDiv.appendChild(messageWrapper);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+        return messageBubble; // Return the bubble element for typing animation
+    }
+
+    function logout() {
+        localStorage.removeItem('jwt');
+        window.location.href = window.location.origin + '/login';
+    }
+
+    async function loadHistory() {
+        const url = window.location.origin + '/api/history';
+        const res = await fetch(url, {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        
+        if (!res.ok) {
+            console.error('Failed to load history:', res.statusText);
+            if (res.status === 401) logout();
+            return;
         }
 
-        chatForm.addEventListener('submit', async function(e) {
+        const data = await res.json();
+        const messagesDiv = document.getElementById('messages');
+        const sessionsDiv = document.getElementById('sessions'); 
+        
+        messagesDiv.innerHTML = ''; 
+        sessionsDiv.innerHTML = ''; 
+        
+        if (data.history.length === 0) {
+            sessionsDiv.innerHTML = `<div class="p-3 bg-gray-200 rounded-lg text-sm text-center text-gray-600 border border-gray-300">No active chat history.</div>`;
+            messagesDiv.innerHTML = `
+                <div class="text-center text-gray-600 mt-4 p-5 border border-gray-300 rounded-xl bg-bot-bg shadow-inner mx-auto max-w-lg">
+                    Hello! I am your AI assistant powered by Gemini. Let start a chat.
+                </div>
+            `;
+        } else {
+            sessionsDiv.innerHTML = `
+                <div class="p-3 bg-accent text-white font-semibold rounded-lg text-sm truncate shadow-md flex justify-between items-center">
+                    <span class="truncate">${data.title || 'Code Chat Session'}</span>
+                    <button onclick="clearHistory()" class="text-white text-base hover:text-red-300 transition duration-150 p-1 rounded-full hover:bg-red-700/50 flex items-center justify-center -mr-2" title="Delete Current Chat">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 10-2 0v6a1 1 0 102 0V8z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
+            `;
+
+            data.history.forEach(msg => {
+                const text = msg.parts && msg.parts.length > 0 ? msg.parts[0].text : '...';
+                appendMessage(msg.role, text);
+            });
+        }
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    // ================= Custom Confirmation Modal Logic (Unchanged) =================
+    let currentConfirmCallback = null;
+    const confirmModal = document.getElementById('confirmModal');
+    const confirmMessage = document.getElementById('confirmMessage');
+    const confirmBtn = document.getElementById('confirmBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+
+    function showConfirmModal(message, onConfirm) {
+        confirmMessage.textContent = message;
+        currentConfirmCallback = onConfirm;
+
+        confirmModal.classList.remove('hidden');
+        confirmModal.querySelector('div').classList.remove('scale-95');
+        confirmModal.addEventListener('click', hideOnBackdropClick);
+    }
+
+    function hideConfirmModal() {
+        const modalContent = confirmModal.querySelector('div');
+        modalContent.classList.add('scale-95');
+        confirmModal.removeEventListener('click', hideOnBackdropClick);
+
+        setTimeout(() => {
+            confirmModal.classList.add('hidden');
+        }, 150); 
+    }
+    
+    function hideOnBackdropClick(event) {
+        if (event.target === confirmModal) {
+            hideConfirmModal();
+        }
+    }
+
+    confirmBtn.addEventListener('click', () => {
+        hideConfirmModal();
+        if (currentConfirmCallback) {
+            currentConfirmCallback(true);
+        }
+    });
+
+    cancelBtn.addEventListener('click', () => {
+        hideConfirmModal();
+        if (currentConfirmCallback) {
+            currentConfirmCallback(false);
+        }
+    });
+    // ================= END Custom Confirmation Modal Logic =================
+
+    async function sendMessage() {
+        const sendBtn = document.getElementById('sendBtn');
+        const msg = msgInput.value.trim();
+        if (!msg) return;
+
+        msgInput.disabled = true;
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>';
+
+        appendMessage('user', msg);
+        msgInput.value = '';
+
+        const botMessageElement = appendMessage('model', null);
+        botMessageElement.innerHTML = `<span id="typing-indicator">Assistant is typing...</span>`;
+
+        const url = window.location.origin + '/api/chat';
+        let responseText = 'Error: Failed to get response from server. Check console for details.';
+        
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                body: JSON.stringify({ message: msg })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                responseText = data.response;
+                typeResponse(botMessageElement, responseText);
+            } else {
+                responseText = `Error: Server responded with status ${res.status}.`;
+                botMessageElement.innerHTML = renderMarkdown(responseText); 
+                console.error("API Chat Error:", res.status, await res.text());
+                if (res.status === 401) logout();
+            }
+        } catch (e) {
+            responseText = 'Error: Network failure or Gemini API connection failed.';
+            botMessageElement.innerHTML = renderMarkdown(responseText);
+            console.error("Fetch failed during sendMessage:", e);
+        } finally {
+            msgInput.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.innerHTML = 'Send';
+            msgInput.focus();
+            loadHistory(); 
+        }
+    }
+
+    async function clearHistory() {
+        showConfirmModal("Are you sure you want to clear the current chat history and start a new session? This action cannot be undone.", async (confirmed) => {
+            if (!confirmed) return;
+            
+            const url = window.location.origin + '/api/history/reset';
+            const res = await fetch(url, { 
+                method: 'POST', 
+                headers: { 'Authorization': 'Bearer ' + token } 
+            });
+            
+            if (!res.ok) {
+                console.error('Failed to reset history:', res.statusText);
+                if (res.status === 401) logout();
+                return;
+            }
+            
+            loadHistory();
+        });
+    }
+
+    // ================= Resizer Drag Logic (from example, fully functional) =================
+    document.addEventListener('DOMContentLoaded', () => {
+        const sidebar = document.getElementById('sidebar');
+        const resizer = document.getElementById('resizer');
+        
+        const MIN_WIDTH = 280;
+        const MAX_WIDTH_PERCENT = 0.5; // 50% of window width
+        let isResizing = false;
+
+        // --- MOUSE DOWN (Start Drag) ---
+        resizer.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            const message = userInput.value.trim();
-            if (!message) return;
+            
+            isResizing = true;
+            
+            // Add visual feedback and lock cursor globally
+            resizer.classList.add('active');
+            document.body.classList.add('resizing');
+        });
 
-            appendMessage('user', message);
-            userInput.value = '';
-            sendButton.disabled = true;
+        // --- MOUSE MOVE (Dragging) ---
+        window.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            
+            const newWidth = e.clientX;
+            const maxWidth = window.innerWidth * MAX_WIDTH_PERCENT; 
 
-            // Append loading bubble
-            appendMessage('bot', 'Typing...');
-            const loadingBubble = chatLog.lastElementChild.querySelector('.chat-message');
+            // Clamp the new width to the allowed range
+            let finalWidth = newWidth;
+            if (finalWidth < MIN_WIDTH) {
+                finalWidth = MIN_WIDTH;
+            } else if (finalWidth > maxWidth) {
+                finalWidth = maxWidth;
+            }
 
-            try {
-                const response = await fetch('{{ url_for("chat") }}', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ message: message })
-                });
+            // CRITICAL: Update the width directly on the sidebar element
+            sidebar.style.width = `${finalWidth}px`;
+        });
 
-                if (response.status === 401) {
-                    // Redirect to login if unauthorized
-                    window.location.href = '{{ url_for("login") }}';
-                    return;
-                }
-
-                const data = await response.json();
+        // --- MOUSE UP (Stop Drag) ---
+        window.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
                 
-                // Remove loading bubble
-                chatLog.removeChild(chatLog.lastElementChild); 
-                
-                if (data.response) {
-                    appendMessage('bot', data.response);
-                } else if (data.error) {
-                    appendMessage('bot', 'Error: ' + data.error);
-                }
-
-            } catch (error) {
-                // Remove loading bubble
-                chatLog.removeChild(chatLog.lastElementChild);
-                appendMessage('bot', 'Network Error: Could not reach the server.');
-                console.error('Chat error:', error);
-            } finally {
-                sendButton.disabled = false;
+                // Remove visual feedback and unlock cursor/selection
+                resizer.classList.remove('active');
+                document.body.classList.remove('resizing');
             }
         });
-    </script>
+    });
+    // ================= END Resizer Drag Logic =================
+
+
+    // ================= Event Listeners =================
+    // 1. Send message on Enter key press (excluding Shift+Enter for new lines)
+    msgInput.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault(); // Prevent new line
+            sendMessage();
+        }
+    });
+
+    // 2. Adjust textarea height dynamically
+    msgInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight) + 'px';
+        if (this.scrollHeight > 150) { // Limit max height
+            this.style.overflowY = 'auto';
+        } else {
+            this.style.overflowY = 'hidden';
+        }
+    });
+
+
+    // Load history on initial page load
+    window.onload = loadHistory;
+</script>
 </body>
 </html>

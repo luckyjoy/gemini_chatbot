@@ -1,307 +1,181 @@
 import os
-import sqlite3
-import json # NEW: For history.json
-from datetime import timedelta, datetime # NEW: For history.json timestamps
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
-from flask_jwt_extended import (
-    create_access_token, jwt_required, JWTManager, get_jwt_identity, unset_jwt_cookies
-)
-from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
+import time
+import requests
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+# NOTE: Added 'redirect' import for the root route
+from flask import Flask, jsonify, request, render_template, redirect 
+from jwt import encode, decode, ExpiredSignatureError, InvalidTokenError
 from dotenv import load_dotenv
 
-# NEW: Import the Google GenAI SDK
-from google import genai
-from google.genai.errors import APIError
-
-# Load environment variables from .env file
+# --- Load environment variables ---
 load_dotenv()
 
-# Define the model and file paths
-GEMINI_MODEL = "gemini-2.5-flash" 
-HISTORY_FILE = "history.json" # New: Central storage for all user chat sessions
+ADMIN_USER = os.getenv("ADMIN_USER")
+ADMIN_PASS = os.getenv("ADMIN_PASS")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+JWT_SECRET = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
+JWT_EXP_DELTA_MINUTES = 60
 
-# --- App and Configuration Setup ---
-app = Flask(__name__)
+if not all([ADMIN_USER, ADMIN_PASS, GEMINI_API_KEY, JWT_SECRET]):
+    # This should be checked in your setup
+    print("WARNING: Missing ADMIN_USER, ADMIN_PASS, GEMINI_API_KEY, or JWT_SECRET environment variables.")
 
-# --- NEW: Define Absolute Database Path ---
-INSTANCE_DIR = os.path.join(app.root_path, 'instance')
-DB_PATH = os.path.join(INSTANCE_DIR, 'chatbot.db')
+GEMINI_API_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-2.5-flash-preview-05-20:generateContent"
+)
 
-# Load keys and credentials from environment
-# Using GOOGLE_API_KEY as defined in the README/updated .env
-GEMINI_API_KEY = os.environ.get("GOOGLE_API_KEY", "") 
+# CRITICAL FIX: Explicitly set template folder and initialize Flask
+app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "supersecretkey")
 
-ADMIN_USER = os.environ.get("ADMIN_USER", "default_admin") 
-ADMIN_PASS = os.environ.get("ADMIN_PASS", "default_pass")
+# --- In-memory user sessions ---
+# Key: user_id, Value: {"history": [...], "title": "..."}
+user_sessions = {}
 
-# Configuration 
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-super-secret-key')
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'another-default-jwt-secret')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-app.config['JWT_TOKEN_LOCATION'] = ['headers']
+# ================= JWT HELPERS =================
+def generate_jwt(user_id):
+    now = datetime.now(timezone.utc)
+    payload = {"user_id": user_id, "iat": now, "exp": now + timedelta(minutes=JWT_EXP_DELTA_MINUTES)}
+    return encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-# Database Configuration (SQLite)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + DB_PATH 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-db = SQLAlchemy(app)
-jwt = JWTManager(app)
-
-# NEW: Initialize the Gemini Client
-try:
-    if not GEMINI_API_KEY:
-        raise ValueError("GOOGLE_API_KEY is not set in the environment.") 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    print("[DEBUG] Gemini client initialized successfully.")
-except Exception as e:
-    print(f"[ERROR] Failed to initialize Gemini client: {e}")
-    client = None
-
-
-# --- Chat History Management Functions (NEW) ---
-
-def load_all_chat_data():
-    """Loads the entire content of history.json."""
-    if not os.path.exists(HISTORY_FILE):
-        return {}
+def get_user_id_from_token():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return None
     try:
-        with open(HISTORY_FILE, 'r') as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        print(f"[WARNING] {HISTORY_FILE} is empty or corrupted. Initializing new file.")
-        return {}
+        token = auth_header.split(" ")[1]
+        payload = decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get('user_id')
+    except (ExpiredSignatureError, InvalidTokenError, IndexError):
+        return None
 
-def save_all_chat_data(data):
-    """Saves the entire chat data structure to history.json."""
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user_id = get_user_id_from_token()
+        if not user_id:
+            # Return JSON for API calls
+            if request.path.startswith('/api/'):
+                return jsonify({"msg": "Authentication required"}), 401
+            # For non-API routes (like /chat), this logic is now handled client-side.
+            return redirect("/login")
+        return f(user_id, *args, **kwargs)
+    return decorated
 
-def load_chat_sessions(username):
-    """Loads all chat sessions for a specific user."""
-    all_data = load_all_chat_data()
-    return all_data.get(username, [])
+# ================= GEMINI API CALL (Simplified for brevity) =================
+def sanitize_history(history):
+    sanitized = []
+    expecting_role = 'user'
+    for message in history:
+        role = message.get('role')
+        if role == expecting_role:
+            sanitized.append(message)
+            expecting_role = 'model' if role == 'user' else 'user'
+    if sanitized and sanitized[-1]['role'] == 'user':
+        sanitized.pop()
+    if sanitized and sanitized[0]['role'] == 'model':
+        sanitized.pop(0)
+    return sanitized
 
-def save_chat_session(username, session_id, history):
-    """Updates or creates a chat session for a specific user."""
-    all_data = load_all_chat_data()
-    user_sessions = all_data.get(username, [])
+def call_gemini_api(history, new_user_message):
+    full_history = sanitize_history(history)
+    full_history.append({"role": "user", "parts": [{"text": new_user_message}]})
+    payload = {
+        "contents": full_history,
+        "tools": [{"google_search": {} }],
+        "system_instruction": {
+            "parts": [{"text": "You are a professional Python and C code assistant. Respond clearly and use Markdown formatting for code blocks and explanations. If asked to write code, provide runnable, well-explained code."}]
+        }
+    }
+    api_key = GEMINI_API_KEY
+    api_url = f"{GEMINI_API_URL}?key={api_key}"
+    max_retries = 3
+    base_delay = 1
     
-    # Simple way to set a title based on the first user message
-    title = "New Chat"
-    if history and history[0]['role'] == 'user':
-        title = history[0]['parts'][0]['text'][:50].strip()
-    
-    # Find the session to update
-    found = False
-    for session in user_sessions:
-        if session['id'] == session_id:
-            session['history'] = history
-            session['timestamp'] = datetime.now().isoformat()
-            session['title'] = title
-            found = True
-            break
-            
-    # If not found, it must be a new session
-    if not found:
-        user_sessions.append({
-            'id': session_id,
-            'title': title,
-            'timestamp': datetime.now().isoformat(),
-            'history': history
-        })
-    
-    all_data[username] = user_sessions
-    save_all_chat_data(all_data)
-    
-    return user_sessions
-
-
-# --- Database Model (Unchanged) ---
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128))
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-# --- Startup and Context Management (Unchanged) ---
-
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    db.session.remove()
-
-@app.after_request
-def add_security_headers(response):
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    return response
-
-@app.before_request
-def create_tables():
-    if not os.path.exists(INSTANCE_DIR):
-        os.makedirs(INSTANCE_DIR, exist_ok=True)
-    
-    if not os.path.exists(DB_PATH):
-        with app.app_context():
-            db.create_all()
-            
-            if User.query.filter_by(username=ADMIN_USER).first() is None:
-                admin_user = User(username=ADMIN_USER)
-                admin_user.set_password(ADMIN_PASS) 
-                db.session.add(admin_user)
-                db.session.commit()
-
-# --- Authentication Routes (Unchanged) ---
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'GET':
-        return render_template('login.html')
-
-    data = request.get_json()
-    if not data or not data.get('username') or not data.get('password'):
-        return jsonify({"msg": "Missing username or password"}), 400
-
-    username = data['username']
-    password = data['password']
-    
-    user = User.query.filter_by(username=username).first()
-
-    if user and user.check_password(password):
-        access_token = create_access_token(identity=username)
-        return jsonify(access_token=access_token), 200
-    
-    return jsonify({"msg": "Bad username or password"}), 401
-
-@app.route('/logout')
-def logout():
-    response = redirect(url_for('login'))
-    unset_jwt_cookies(response) 
-    flash('You have been logged out.', 'success')
-    return response
-
-# --- New/Modified Chat History Routes ---
-
-@app.route('/')
-@jwt_required(optional=True)
-def home():
-    """Renders the main chat interface."""
-    return render_template('index.html')
-
-@app.route('/get_chat_sessions', methods=['GET'])
-@jwt_required()
-def get_chat_sessions():
-    """Retrieves the list of chat session titles for the sidebar."""
-    username = get_jwt_identity()
-    sessions = load_chat_sessions(username)
-    
-    formatted_sessions = []
-    for s in sessions:
+    for i in range(max_retries):
         try:
-            timestamp_dt = datetime.fromisoformat(s['timestamp'])
-            date_str = timestamp_dt.strftime("%b %d, %H:%M")
-        except:
-            date_str = "Unknown Date"
-            
-        formatted_sessions.append({
-            'id': s['id'],
-            'title': s['title'],
-            'date': date_str
-        })
-        
-    # Sort by most recent
-    formatted_sessions.sort(key=lambda x: datetime.fromisoformat(sessions[[s['id'] for s in sessions].index(x['id'])]['timestamp']), reverse=True)
-    
-    return jsonify({'sessions': formatted_sessions}), 200
+            response = requests.post(api_url, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'No response generated.')
+        except requests.exceptions.RequestException as e:
+            if response is not None and response.status_code == 400:
+                return f"Error: Gemini API failed (400). Response: {response.text[:100]}"
+            if i == max_retries - 1:
+                return f"Error: Failed to connect to Gemini API after {max_retries} attempts."
+            time.sleep(base_delay * (2 ** i))
 
-@app.route('/load_session/<session_id>', methods=['GET'])
-@jwt_required()
-def load_session(session_id):
-    """Loads a specific chat session's history."""
-    username = get_jwt_identity()
-    sessions = load_chat_sessions(username)
-    
-    for session_data in sessions:
-        if session_data['id'] == session_id:
-            return jsonify({'history': session_data['history']}), 200
-            
-    return jsonify({'msg': 'Session not found'}), 404
+    return "Error: Failed to connect to Gemini API."
 
+# ================= ROUTES =================
 
-@app.route('/chat', methods=['POST'])
-@jwt_required()
-def chat():
-    global client
-    username = get_jwt_identity()
+@app.route("/")
+def index():
+    return redirect("/login")
+
+@app.route("/login", methods=["GET"])
+def login():
+    return render_template("login.html")
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
     data = request.get_json()
-    user_message = data.get('message')
-    session_id = data.get('sessionId')
+    username = data.get('username')
+    password = data.get('password')
 
-    if not user_message or not session_id:
-        return jsonify({'msg': 'Missing message or sessionId'}), 400
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        token = generate_jwt(username)
+        return jsonify({"token": token}), 200
+    return jsonify({"msg": "Invalid username or password"}), 401
 
-    try:
-        if client is None:
-             raise ValueError("Gemini client is not initialized. Check API key.")
-        
-        # 1. Load Conversation History
-        user_sessions = load_chat_sessions(username)
-        current_history = []
-        is_new_session = True
-        
-        for session_data in user_sessions:
-            if session_data['id'] == session_id:
-                current_history = session_data['history']
-                is_new_session = False
-                break
-        
-        # 2. Build Contents for API Call
-        contents = list(current_history)
-        user_part = {"role": "user", "parts": [{"text": user_message}]}
-        contents.append(user_part)
-        
-        # 3. Configuration for the model
-        config = genai.types.GenerateContentConfig( 
-            system_instruction="You are a helpful and concise AI assistant, running on Flask and powered by Google Gemini.",
-        )
 
-        # 4. Call the Gemini API
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=contents, 
-            config=config,
-        )
+@app.route("/chat")
+# --- FIX: Removed @token_required decorator ---
+def chat():
+    # The client-side JS in chat.html will check localStorage for the token
+    return render_template("chat.html")
 
-        # 5. Process and Update History
-        ai_response = response.text
-        model_part = {"role": "model", "parts": [{"text": ai_response}]}
-        
-        # Update the history list
-        current_history.append(user_part)
-        current_history.append(model_part)
-        
-        # Save the updated history back to the file
-        save_chat_session(username, session_id, current_history)
+@app.route("/api/chat", methods=["POST"])
+@token_required
+def api_chat(user_id):
+    data = request.get_json()
+    user_message = (data.get("message") or "").strip()
+    if not user_message:
+        return jsonify({"response": "Please enter a message."})
 
-        return jsonify({'response': ai_response, 'sessionId': session_id, 'isNewSession': is_new_session}), 200
+    user_data = user_sessions.setdefault(user_id, {"history": [], "title": None})
+    history = user_data["history"]
 
-    except APIError as e:
-        mock_response = "Gemini API is unavailable or has an error. Please check your key/quota."
-        return jsonify({'response': mock_response}), 200 
+    response_text = call_gemini_api(history, user_message)
+
+    history.append({"role": "user", "parts": [{"text": user_message}]})
+    history.append({"role": "model", "parts": [
+        {"text": response_text}
+    ]})
+
+    if not user_data["title"]:
+        user_data["title"] = user_message[:50] + ("..." if len(user_message) > 50 else "")
+
+    return jsonify({"response": response_text})
+
+@app.route("/api/history", methods=["GET"])
+@token_required
+def get_history(user_id):
+    user_data = user_sessions.setdefault(user_id, {"history": [], "title": None})
+    return jsonify({"history": user_data["history"], "title": user_data["title"]})
+
+@app.route("/api/history/reset", methods=["POST"])
+@token_required
+def reset_history(user_id):
+    user_sessions[user_id] = {"history": [], "title": None}
+    return jsonify({"msg": "Chat history cleared."})
+
+# ================= MAIN =================
+if __name__ == "__main__":
+    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+        print("Certificates 'cert.pem' and 'key.pem' not found. Ensure 'setup.sh' created them.")
     
-    except ValueError as e:
-        mock_response = f"The application is missing a critical configuration: {e}"
-        return jsonify({'response': mock_response}), 200 
-
-    except Exception as e:
-        return jsonify({'msg': f'An application error occurred: {e}'}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True, ssl_context='adhoc')
+    app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))
