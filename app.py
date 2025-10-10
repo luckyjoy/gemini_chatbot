@@ -1,238 +1,181 @@
 import os
-import sqlite3
-import requests # New: Import requests for manual API call
-import json     # New: Import json for handling JSON payloads
-from datetime import timedelta
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
-from flask_jwt_extended import (
-    create_access_token, jwt_required, JWTManager, get_jwt_identity, unset_jwt_cookies
-)
-from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
+import time
+import requests
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+# NOTE: Added 'redirect' import for the root route
+from flask import Flask, jsonify, request, render_template, redirect 
+from jwt import encode, decode, ExpiredSignatureError, InvalidTokenError
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# --- Load environment variables ---
 load_dotenv()
 
-# Define the model and API endpoint to use
-OPENAI_MODEL = "gpt-3.5-turbo"
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions" # OpenAI Chat API endpoint
+ADMIN_USER = os.getenv("ADMIN_USER")
+ADMIN_PASS = os.getenv("ADMIN_PASS")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+JWT_SECRET = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
+JWT_EXP_DELTA_MINUTES = 60
 
-# --- App and Configuration Setup ---
-app = Flask(__name__)
+if not all([ADMIN_USER, ADMIN_PASS, GEMINI_API_KEY, JWT_SECRET]):
+    # This should be checked in your setup
+    print("WARNING: Missing ADMIN_USER, ADMIN_PASS, GEMINI_API_KEY, or JWT_SECRET environment variables.")
 
-# --- NEW: Define Absolute Database Path ---
-# Define the path to the 'instance' directory
-INSTANCE_DIR = os.path.join(app.root_path, 'instance')
-# Define the absolute path for the SQLite database file
-DB_PATH = os.path.join(INSTANCE_DIR, 'chatbot.db')
+GEMINI_API_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-2.5-flash-preview-05-20:generateContent"
+)
 
-# Load keys and credentials from environment
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-ADMIN_USER = os.environ.get("ADMIN_USER", "default_admin") # Load from .env
-ADMIN_PASS = os.environ.get("ADMIN_PASS", "default_pass") # Load from .env
+# CRITICAL FIX: Explicitly set template folder and initialize Flask
+app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "supersecretkey")
 
-# Configuration - Using values loaded from .env
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-super-secret-key') # Used for sessions, etc.
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'another-default-jwt-secret') # Used for signing JWTs
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-app.config['JWT_TOKEN_LOCATION'] = ['headers'] # Ensure JWT is only read from headers
+# --- In-memory user sessions ---
+# Key: user_id, Value: {"history": [...], "title": "..."}
+user_sessions = {}
 
-# Database Configuration (SQLite)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + DB_PATH 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# ================= JWT HELPERS =================
+def generate_jwt(user_id):
+    now = datetime.now(timezone.utc)
+    payload = {"user_id": user_id, "iat": now, "exp": now + timedelta(minutes=JWT_EXP_DELTA_MINUTES)}
+    return encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-db = SQLAlchemy(app)
-jwt = JWTManager(app)
-
-# --- Database Model ---
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128))
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-# --- Startup and Context Management ---
-
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    """Closes the database session at the end of the request or application context."""
-    db.session.remove()
-
-# --- Security Enhancement: Add common security headers ---
-@app.after_request
-def add_security_headers(response):
-    """Adds common security headers to all responses."""
-    # Prevents clickjacking attacks
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    # Prevents browsers from trying to guess content type
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    # Enables XSS filtering in older browsers
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    # Forces connection over HTTPS for future requests (max-age is 1 year)
-    # NOTE: 'adhoc' SSL is not fully secure, but we enforce this header as best practice.
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    
-    return response
-
-# Initialize database and default user if necessary
-@app.before_request
-def create_tables():
-    # Ensure the 'instance' directory exists
-    if not os.path.exists(INSTANCE_DIR):
-        os.makedirs(INSTANCE_DIR, exist_ok=True)
-        print("[DEBUG] Created 'instance' directory.")
-    
-    # Check if the database file already exists using the absolute path
-    if not os.path.exists(DB_PATH):
-        with app.app_context():
-            db.create_all()
-            
-            # --- UPDATED: Use ENV variables for Admin Creation ---
-            if User.query.filter_by(username=ADMIN_USER).first() is None:
-                admin_user = User(username=ADMIN_USER)
-                admin_user.set_password(ADMIN_PASS) 
-                db.session.add(admin_user)
-                db.session.commit()
-                print(f"[DEBUG] Created default user from ENV: {ADMIN_USER}/{ADMIN_PASS}")
-            # --- END UPDATED ---
-
-# --- Authentication Routes ---
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'GET':
-        return render_template('login.html')
-
-    # POST request handling
-    data = request.get_json()
-    if not data or not data.get('username') or not data.get('password'):
-        return jsonify({"msg": "Missing username or password"}), 400
-
-    username = data['username']
-    password = data['password']
-    
-    user = User.query.filter_by(username=username).first()
-
-    if user and user.check_password(password):
-        # Create the access token using the user's username as the identity
-        access_token = create_access_token(identity=username)
-        print(f"[DEBUG] Login SUCCESS for user: {username}. Returning JWT.")
-        return jsonify(access_token=access_token), 200
-    
-    print(f"[DEBUG] Login FAILED for user: {username}")
-    return jsonify({"msg": "Bad username or password"}), 401
-
-@app.route('/logout')
-def logout():
-    # The actual token removal happens client-side (removal from localStorage)
-    # We simply redirect to the login page
-    response = redirect(url_for('login'))
-    # Optionally, clear any auth cookies if they were being used
-    unset_jwt_cookies(response) 
-    flash('You have been logged out.', 'success')
-    return response
-
-# --- Main Application Routes ---
-
-@app.route('/')
-def home():
-    # The client-side (index.html) already handles the redirect if a token is missing.
-    # However, to ensure the user always hits /login first after a server restart 
-    # and to simplify the client-side logic slightly:
-    
-    # Check if an Authorization header is present (only needed if we are checking JWT on the '/' route, 
-    # but the client-side check in index.html is cleaner).
-    
-    # Simpler approach: If the user is unauthenticated, the client-side JS in index.html
-    # will call logoutAndRedirect(), which redirects to /logout, which then redirects to /login.
-    # To prevent this indirect loop, we will rely only on the client-side logic in index.html
-    # and the explicit server-side check on the /chat route.
-    
-    # For a clean startup, we can just ensure that if the app is accessed without an explicit
-    # path, it redirects to the login page, unless the client-side token check passes.
-    # But since the client-side in index.html already handles redirecting to logout/login
-    # if no token is found, we just render index.html here.
-    return render_template('index.html')
-
-@app.route('/chat', methods=['POST'])
-@jwt_required()
-def chat():
-    # Get the user's identity (username) from the JWT
-    current_user_id = get_jwt_identity()
-    data = request.get_json()
-    user_message = data.get('message')
-
-    if not user_message:
-        return jsonify({'msg': 'No message provided'}), 400
-
-    print(f"[DEBUG] User {current_user_id} sent: {user_message}")
-
+def get_user_id_from_token():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return None
     try:
-        if not OPENAI_API_KEY:
-             raise ValueError("OPENAI_API_KEY environment variable is not set. Chat disabled.")
-        
-        # 1. Define Request Headers
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
+        token = auth_header.split(" ")[1]
+        payload = decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get('user_id')
+    except (ExpiredSignatureError, InvalidTokenError, IndexError):
+        return None
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user_id = get_user_id_from_token()
+        if not user_id:
+            # Return JSON for API calls
+            if request.path.startswith('/api/'):
+                return jsonify({"msg": "Authentication required"}), 401
+            # For non-API routes (like /chat), this logic is now handled client-side.
+            return redirect("/login")
+        return f(user_id, *args, **kwargs)
+    return decorated
+
+# ================= GEMINI API CALL (Simplified for brevity) =================
+def sanitize_history(history):
+    sanitized = []
+    expecting_role = 'user'
+    for message in history:
+        role = message.get('role')
+        if role == expecting_role:
+            sanitized.append(message)
+            expecting_role = 'model' if role == 'user' else 'user'
+    if sanitized and sanitized[-1]['role'] == 'user':
+        sanitized.pop()
+    if sanitized and sanitized[0]['role'] == 'model':
+        sanitized.pop(0)
+    return sanitized
+
+def call_gemini_api(history, new_user_message):
+    full_history = sanitize_history(history)
+    full_history.append({"role": "user", "parts": [{"text": new_user_message}]})
+    payload = {
+        "contents": full_history,
+        "tools": [{"google_search": {} }],
+        "system_instruction": {
+            "parts": [{"text": "You are a professional Python and C code assistant. Respond clearly and use Markdown formatting for code blocks and explanations. If asked to write code, provide runnable, well-explained code."}]
         }
+    }
+    api_key = GEMINI_API_KEY
+    api_url = f"{GEMINI_API_URL}?key={api_key}"
+    max_retries = 3
+    base_delay = 1
+    
+    for i in range(max_retries):
+        try:
+            response = requests.post(api_url, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'No response generated.')
+        except requests.exceptions.RequestException as e:
+            if response is not None and response.status_code == 400:
+                return f"Error: Gemini API failed (400). Response: {response.text[:100]}"
+            if i == max_retries - 1:
+                return f"Error: Failed to connect to Gemini API after {max_retries} attempts."
+            time.sleep(base_delay * (2 ** i))
 
-        # 2. Define Request Payload
-        payload = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a helpful and concise AI assistant, running on Flask."},
-                {"role": "user", "content": user_message}
-            ],
-            "max_tokens": 150, # Optional: Limit response length
-            "temperature": 0.7
-        }
+    return "Error: Failed to connect to Gemini API."
 
-        # 3. Make the Manual HTTP POST Request
-        response = requests.post(
-            OPENAI_API_URL, 
-            headers=headers, 
-            data=json.dumps(payload)
-        )
-        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+# ================= ROUTES =================
 
-        # 4. Process the Response
-        api_data = response.json()
-        
-        # Extract the response text safely
-        ai_response = api_data['choices'][0]['message']['content']
+@app.route("/")
+def index():
+    return redirect("/login")
 
-        print(f"[DEBUG] AI responded.")
-        return jsonify({'response': ai_response}), 200
+@app.route("/login", methods=["GET"])
+def login():
+    return render_template("login.html")
 
-    except requests.exceptions.HTTPError as errh:
-        error_details = errh.response.json()
-        print(f"[ERROR] HTTP Error: {error_details}")
-        
-        status_code = errh.response.status_code
-        
-        if status_code in [401, 403, 429]:
-            # Provide a mock response for common API errors (Authentication, Permissions, Rate Limit, Quota)
-            mock_response = (
-                "It looks like the OpenAI API is currently unavailable or has exceeded its quota (HTTP "
-                f"{status_code}). I am currently unable to answer your query. Please check your "
-                "API key, plan, and billing details."
-            )
-            # Return 200 so the client displays the error message gracefully as an AI response
-            return jsonify({'response': mock_response}), 200 
-        
-        # For other HTTP errors, return the raw error message and status code
-        return jsonify({'msg': f'OpenAI API Error (HTTP {errh.response.status_code}): {error_details.get("error", {}).get("message", "Unknown error")}'}), errh.response.status_code
-    except Exception as e:
-        print(f"[ERROR] Chat failed: {e}")
-        # Return a JSON error message for application failures
-        return jsonify({'msg': f'An application error occurred: {e}'}), 500
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
 
-if __name__ == '__main__':
-    app.run(debug=True, ssl_context='adhoc')
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        token = generate_jwt(username)
+        return jsonify({"token": token}), 200
+    return jsonify({"msg": "Invalid username or password"}), 401
+
+
+@app.route("/chat")
+# --- FIX: Removed @token_required decorator ---
+def chat():
+    # The client-side JS in chat.html will check localStorage for the token
+    return render_template("chat.html")
+
+@app.route("/api/chat", methods=["POST"])
+@token_required
+def api_chat(user_id):
+    data = request.get_json()
+    user_message = (data.get("message") or "").strip()
+    if not user_message:
+        return jsonify({"response": "Please enter a message."})
+
+    user_data = user_sessions.setdefault(user_id, {"history": [], "title": None})
+    history = user_data["history"]
+
+    response_text = call_gemini_api(history, user_message)
+
+    history.append({"role": "user", "parts": [{"text": user_message}]})
+    history.append({"role": "model", "parts": [
+        {"text": response_text}
+    ]})
+
+    if not user_data["title"]:
+        user_data["title"] = user_message[:50] + ("..." if len(user_message) > 50 else "")
+
+    return jsonify({"response": response_text})
+
+@app.route("/api/history", methods=["GET"])
+@token_required
+def get_history(user_id):
+    user_data = user_sessions.setdefault(user_id, {"history": [], "title": None})
+    return jsonify({"history": user_data["history"], "title": user_data["title"]})
+
+@app.route("/api/history/reset", methods=["POST"])
+@token_required
+def reset_history(user_id):
+    user_sessions[user_id] = {"history": [], "title": None}
+    return jsonify({"msg": "Chat history cleared."})
+
+# ================= MAIN =================
+if __name__ == "__main__":
+    if not os.path.exists("cert.pem") or not os.path.exists("key.pem"):
+        print("Certificates 'cert.pem' and 'key.pem' not found. Ensure 'setup.sh' created them.")
+    
+    app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))

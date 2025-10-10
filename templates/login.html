@@ -3,84 +3,141 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatbot Login</title>
+    <title>Chatbot by Bang Thien Nguye Login</title>
+    <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
 </head>
-<body class="min-h-screen flex items-center justify-center bg-gray-100">
+<body class="bg-gray-100 min-h-screen flex items-center justify-center font-sans">
 
-    <div class="w-full max-w-md">
-        <div class="bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
-            <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Welcome Back</h2>
-            <p class="text-center text-gray-500 mb-8">Sign in to start chatting with the AI assistant.</p>
-            
-            <form id="loginForm" class="space-y-6">
-                <div>
-                    <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
-                    <input type="text" id="username" name="username" required
-                           class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out">
-                </div>
-                <div>
-                    <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-                    <input type="password" id="password" name="password" required
-                           class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out">
-                </div>
-                
-                <div id="message" class="text-center text-sm font-medium text-red-600 hidden"></div>
+    <!-- Message Box (replaces alert()) -->
+    <div id="message-container" class="fixed top-4 right-4 z-50"></div>
 
-                <button type="submit"
-                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-300 ease-in-out transform hover:scale-[1.01]">
-                    Log In
-                </button>
-            </form>
+    <div class="w-full max-w-md bg-white p-8 rounded-xl shadow-2xl space-y-6">
+        <h2 class="text-3xl font-bold text-center text-gray-800">Login to Code Assistant</h2>
+        
+        <form id="login-form" class="space-y-4">
+            <div>
+                <label for="username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                <!-- Default values set for quick testing: admin -->
+                <input type="text" id="username" value="admin" required
+                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out"
+                       placeholder="Enter username">
+            </div>
             
-        </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <!-- Default values set for quick testing: admin1234@ -->
+                <input type="password" id="password" value="admin1234@" required
+                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 ease-in-out"
+                       placeholder="Enter password">
+            </div>
+            
+            <button type="submit" id="loginBtn"
+                    class="w-full py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition duration-150 ease-in-out">
+                Sign In
+            </button>
+        </form>
     </div>
 
     <script>
-        document.getElementById('loginForm').addEventListener('submit', async function(event) {
-            event.preventDefault();
+        // Custom message box to replace alert()
+        function showMessage(msg, isError = true) {
+            const container = document.getElementById('message-container');
+            const color = isError ? 'bg-red-500' : 'bg-green-500';
+            const messageBox = document.createElement('div');
+            
+            messageBox.className = `p-3 mb-2 text-sm text-white ${color} rounded-lg shadow-lg opacity-0 transition-opacity duration-300`;
+            messageBox.textContent = msg;
+            
+            container.appendChild(messageBox);
+            
+            // Fade in
+            setTimeout(() => messageBox.classList.remove('opacity-0'), 10);
+            
+            // Fade out and remove
+            setTimeout(() => {
+                messageBox.classList.add('opacity-0');
+                setTimeout(() => container.removeChild(messageBox), 300);
+            }, 3000);
+        }
+
+        async function doLogin(event) {
+            event.preventDefault(); // Prevent default form submission
+            
+            const loginBtn = document.getElementById('loginBtn');
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Logging in...';
 
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
-            const messageElement = document.getElementById('message');
-            messageElement.textContent = '';
-            messageElement.classList.add('hidden');
 
+            // CRITICAL FIX: Use the dedicated /api/login endpoint and absolute URL
+            const apiUrl = window.location.origin + '/api/login';
+            
+            let res;
             try {
-                const response = await fetch('/login', {
+                res = await fetch(apiUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
                 });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    // Store the JWT token upon successful login
-                    localStorage.setItem('access_token', data.access_token);
-                    // Redirect to the main chat page
-                    window.location.href = '/'; 
-                } else {
-                    const errorData = await response.json();
-                    messageElement.textContent = errorData.msg || 'Login failed. Please check your credentials.';
-                    messageElement.classList.remove('hidden');
-                }
-            } catch (error) {
-                console.error('Network or server error:', error);
-                messageElement.textContent = 'Could not connect to the server.';
-                messageElement.classList.remove('hidden');
+            } catch (e) {
+                showMessage('Network error. Check server connection.', true);
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Sign In';
+                return;
             }
-        });
 
-        // If a token already exists, redirect to the chat page immediately
-        if (localStorage.getItem('access_token')) {
-            window.location.href = '/';
+            // Read body only once as text
+            let responseBodyText = '';
+            try {
+                responseBodyText = await res.text();
+            } catch (e) {
+                showMessage('Login failed: Could not read server response.', true);
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Sign In';
+                return;
+            }
+
+            if (res.ok) {
+                // Successful response (200 OK)
+                try {
+                    const data = JSON.parse(responseBodyText);
+                    localStorage.setItem('jwt', data.token); 
+                    showMessage('Login successful!', false);
+                    // Use absolute path for navigation
+                    window.location.href = window.location.origin + '/chat';
+                } catch (e) {
+                    showMessage('Login succeeded, but server response was unreadable.', true);
+                }
+            } else {
+                // Error response (401, 404, 500, etc.)
+                try {
+                    // Attempt to parse standard JSON error body (e.g., Flask's 401 response)
+                    const data = JSON.parse(responseBodyText);
+                    showMessage(data.msg || 'Invalid username or password.');
+                } catch (e) {
+                    // Fallback if the server returned non-JSON content (e.g., HTML error page like a 404)
+                    showMessage(`Login failed (Status ${res.status}). Ensure the /api/login route is active and running on your Flask server.`);
+                }
+            }
+
+            loginBtn.disabled = false;
+            loginBtn.textContent = 'Sign In';
         }
+
+        document.getElementById('login-form').addEventListener('submit', doLogin);
     </script>
 </body>
 </html>
