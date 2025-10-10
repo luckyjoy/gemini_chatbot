@@ -6,6 +6,7 @@ examples/
 supports/*.py
 allure-results/
 tmp/
+instance/
 
 # VM images & snapshots (HUGE files, never commit)
 *.qcow2
@@ -42,3 +43,5 @@ Thumbs.db
 *.swp
 ci.bat
 run.bat
+g.bat
+
